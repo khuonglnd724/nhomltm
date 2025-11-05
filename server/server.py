@@ -3,7 +3,7 @@ import threading
 from datetime import datetime
 
 HOST = '127.0.0.1'
-PORT = 5555
+PORT = 9009
 
 clients = []         # Danh sách client đang chờ
 rooms = []           # Danh sách bàn chơi [(player1, player2)]
