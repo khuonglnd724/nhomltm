@@ -89,9 +89,8 @@ def handle_move(player_socket, move):
             else:
                 p_result, o_result = "lose", "win"
 
-            # Gửi kết quả trước
-            send_json(player_socket, {"type": "round_result", "result": p_result,
-                                      "your_move": p_move, "opponent_move": o_move})
+            # Gửi kết quả (KHÔNG gửi request_move nữa - để client tự xử lý)
+            send_json(player_socket, {"type": "round_result", "result": p_result,"your_move": p_move, "opponent_move": o_move})
             send_json(opponent_socket, {"type": "round_result", "result": o_result,
                                         "your_move": o_move, "opponent_move": p_move})
 
@@ -102,10 +101,6 @@ def handle_move(player_socket, move):
             # Xóa moves đã chơi
             del moves[player_socket]
             del moves[opponent_socket]
-
-            # Gửi yêu cầu vòng mới
-            send_json(player_socket, {"type": "request_move"})
-            send_json(opponent_socket, {"type": "request_move"})
 
 
 def handle_client(client_socket, addr):
