@@ -1,74 +1,113 @@
+import threading
 import json
+from datetime import datetime
 from leaderboard import update_score
 
-def send_json(conn, obj):
-    """Gửi dữ liệu JSON tới client"""
-    conn.sendall((json.dumps(obj) + '\n').encode())
+lock = threading.Lock()
+clients = {}   # {socket: player_name}
+queue = []     # client chờ ghép cặp
+matches = {}   # {socket: opponent_socket}
+moves = {}     # {socket: move}
 
-def recv_json(conn):
+
+def save_log(msg: str):
+    """Lưu log vào file"""
+    try:
+        with open("game_log.txt", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {msg}\n")
+    except:
+        pass
+
+
+def send_json(sock, obj):
+    """Gửi dữ liệu JSON đến client"""
+    try:
+        sock.sendall((json.dumps(obj) + "\n").encode())
+    except:
+        pass
+
+
+def recv_json(sock):
     """Nhận dữ liệu JSON từ client"""
-    data = b''
-    while b'\n' not in data:
-        part = conn.recv(4096)
-        if not part:
-            return None
-        data += part
-    line, _, _ = data.partition(b'\n')
-    return json.loads(line.decode())
+    try:
+        data = b""
+        while b"\n" not in data:
+            part = sock.recv(4096)
+            if not part:
+                return None
+            data += part
+        line, _, _ = data.partition(b"\n")
+        return json.loads(line.decode())
+    except:
+        return None
 
-def calc_result(move1, move2):
-    """Tính kết quả giữa hai lượt chơi"""
-    if move1 == move2:
-        return "draw", "draw"
 
-    rules = {"rock": "scissors", "scissors": "paper", "paper": "rock"}
-    if rules[move1] == move2:
-        return "win", "lose"
-    else:
-        return "lose", "win"
+def match_players():
+    """Ghép 2 người chơi"""
+    with lock:
+        while len(queue) >= 2:
+            p1 = queue.pop(0)
+            p2 = queue.pop(0)
+            matches[p1] = p2
+            matches[p2] = p1
+            p1_name = clients.get(p1, "Unknown")
+            p2_name = clients.get(p2, "Unknown")
+            send_json(p1, {"type": "match_found", "opponent": p2_name})
+            send_json(p2, {"type": "match_found", "opponent": p1_name})
+            print(f"[MATCH] {p1_name} vs {p2_name}")
+            save_log(f"[MATCH] {p1_name} vs {p2_name}")
 
-def handle_match(p1, p2):
-    """Xử lý một trận đấu giữa 2 người chơi"""
-    c1, n1 = p1  # socket và tên người chơi 1
-    c2, n2 = p2  # socket và tên người chơi 2
+            # Yêu cầu chọn nước đi
+            send_json(p1, {"type": "request_move"})
+            send_json(p2, {"type": "request_move"})
 
-    # Gửi thông báo tìm được đối thủ
-    send_json(c1, {"type": "match_found", "opponent": n2})
-    send_json(c2, {"type": "match_found", "opponent": n1})
 
-    # Yêu cầu người chơi chọn
-    send_json(c1, {"type": "request_move"})
-    send_json(c2, {"type": "request_move"})
-
-    # Nhận kết quả lựa chọn
-    m1 = recv_json(c1)
-    m2 = recv_json(c2)
-
-    if not m1 or not m2:
+def handle_move(player_sock, move):
+    """Xử lý nước đi"""
+    opponent_sock = matches.get(player_sock)
+    if not opponent_sock:
         return
 
-    move1 = m1["move"]
-    move2 = m2["move"]
+    player_name = clients.get(player_sock, "Unknown")
+    opponent_name = clients.get(opponent_sock, "Unknown")
 
-    # Tính kết quả thắng/thua/hòa
-    r1, r2 = calc_result(move1, move2)
+    with lock:
+        moves[player_sock] = move
+        if opponent_sock in moves:
+            p_move = moves[player_sock]
+            o_move = moves[opponent_sock]
 
-    # Gửi kết quả về cho cả hai
-    send_json(c1, {
-        "type": "round_result",
-        "your_move": move1,
-        "opponent_move": move2,
-        "result": r1
-    })
-    send_json(c2, {
-        "type": "round_result",
-        "your_move": move2,
-        "opponent_move": move1,
-        "result": r2
-    })
+            # Tính kết quả
+            if p_move == o_move:
+                p_result = o_result = "draw"
+            elif (p_move == "rock" and o_move == "scissors") or \
+                 (p_move == "scissors" and o_move == "paper") or \
+                 (p_move == "paper" and o_move == "rock"):
+                p_result, o_result = "win", "lose"
+            else:
+                p_result, o_result = "lose", "win"
 
-    # ✅ Cập nhật điểm cho leaderboard
-    update_score(n1, r1)
-    update_score(n2, r2)
+            # Gửi kết quả
+            send_json(player_sock, {
+                "type": "round_result",
+                "your_move": p_move,
+                "opponent_move": o_move,
+                "result": p_result})
+            
+            send_json(opponent_sock, {
+                "type": "round_result",
+                "your_move": o_move,
+                "opponent_move": p_move,
+                "result": o_result})
 
-    print(f"[INFO] Kết quả trận: {n1} ({r1}) vs {n2} ({r2})")
+            log_msg = f"{player_name}({p_move}) vs {opponent_name}({o_move}) => P1:{p_result}, P2:{o_result}"
+            print(f"[RESULT] {log_msg}")
+            save_log(log_msg)
+
+            # Cập nhật leaderboard
+            update_score(player_name, p_result)
+            update_score(opponent_name, o_result)
+
+            # Xóa moves
+            del moves[player_sock]
+            del moves[opponent_sock]
