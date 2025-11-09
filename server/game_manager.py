@@ -23,8 +23,9 @@ def send_json(sock, obj):
     """Gửi dữ liệu JSON đến client"""
     try:
         sock.sendall((json.dumps(obj) + "\n").encode())
+        return True
     except:
-        pass
+        return False
 
 
 def recv_json(sock):
@@ -151,3 +152,12 @@ def handle_move(player_sock, move):
             # Xóa moves
             del moves[player_sock]
             del moves[opponent_sock]
+
+            # QUAN TRỌNG: Yêu cầu round tiếp theo
+            # Kiểm tra xem cả 2 client vẫn còn kết nối
+            if player_sock in clients and opponent_sock in clients:
+                if send_json(player_sock, {"type": "request_move"}):
+                    send_json(opponent_sock, {"type": "request_move"})
+                else:
+                    # Nếu không gửi được, có thể client đã disconnect
+                    print(f"[WARNING] Cannot send request_move to {player_name}")
